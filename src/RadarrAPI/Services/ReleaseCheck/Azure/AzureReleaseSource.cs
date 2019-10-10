@@ -3,16 +3,17 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using RadarrAPI.Database;
-using RadarrAPI.Database.Models;
-using RadarrAPI.Services.ReleaseCheck.Azure.Responses;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Newtonsoft.Json;
+using RadarrAPI.Database;
+using RadarrAPI.Database.Models;
 using RadarrAPI.Options;
-using OperatingSystem = RadarrAPI.Update.OperatingSystem;
+using RadarrAPI.Services.ReleaseCheck.Azure.Responses;
 using RadarrAPI.Update;
+using RadarrAPI.Util;
 
 namespace RadarrAPI.Services.ReleaseCheck.Azure
 {
@@ -20,7 +21,6 @@ namespace RadarrAPI.Services.ReleaseCheck.Azure
     {
         private const string AccountName = "Radarr";
         private const string ProjectSlug = "Radarr";
-        private const string BranchName = "aphrodite";
         private const string PackageArtifactName = "Packages";
 
         private static int? _lastBuildId;
@@ -28,6 +28,9 @@ namespace RadarrAPI.Services.ReleaseCheck.Azure
         private readonly DatabaseContext _database;
         private readonly RadarrOptions _config;
         private readonly HttpClient _httpClient;
+
+        private static readonly Regex ReleaseFeaturesGroup = new Regex(@"^New:\s*(?<text>.*?)\r*$", RegexOptions.Compiled);
+        private static readonly Regex ReleaseFixesGroup = new Regex(@"^Fixed:\s*(?<text>.*?)\r*$", RegexOptions.Compiled);
 
         public AzureReleaseSource(DatabaseContext database, IHttpClientFactory httpClientFactory, IOptions<RadarrOptions> config)
         {
@@ -43,8 +46,18 @@ namespace RadarrAPI.Services.ReleaseCheck.Azure
                 throw new ArgumentException("ReleaseBranch must not be unknown when fetching releases.");
             }
 
+            string branchName;
+            if (ReleaseBranch == Branch.Aphrodite)
+            {
+                branchName = "aphrodite";
+            }
+            else
+            {
+                throw new ArgumentException($"ReleaseBranch {ReleaseBranch} not supported for Azure");
+            }
+
             var hasNewRelease = false;
-            var historyUrl = $"https://dev.azure.com/{AccountName}/{ProjectSlug}/_apis/build/builds?api-version=5.1&branchName=refs/heads/{BranchName}&reasonFilter=individualCI&statusFilter=completed&resultFilter=succeeded&queryOrder=startTimeDescending&$top=5";
+            var historyUrl = $"https://dev.azure.com/{AccountName}/{ProjectSlug}/_apis/build/builds?api-version=5.1&branchName=refs/heads/{branchName}&reasonFilter=individualCI&statusFilter=completed&resultFilter=succeeded&queryOrder=startTimeDescending&$top=5";
             var historyData = await _httpClient.GetStringAsync(historyUrl);
             var history = JsonConvert.DeserializeObject<AzureList<AzureProjectBuild>>(historyData).Value;
 
@@ -99,8 +112,7 @@ namespace RadarrAPI.Services.ReleaseCheck.Azure
                     {
                         Version = build.Version,
                         ReleaseDate = build.Started.Value.UtcDateTime,
-                        Branch = ReleaseBranch,
-                        New = changes.Select(x => x.Message).ToList()
+                        Branch = ReleaseBranch
                     };
 
                     // Start tracking this object
@@ -110,34 +122,50 @@ namespace RadarrAPI.Services.ReleaseCheck.Azure
                     hasNewRelease = true;
                 }
 
+                // Parse changes
+                var features = changes.Select(x => ReleaseFeaturesGroup.Match(x.Message));
+                if (features.Any(x => x.Success))
+                {
+                    updateEntity.New.Clear();
+
+                    foreach (Match match in features.Where(x => x.Success))
+                    {
+                        updateEntity.New.Add(match.Groups["text"].Value);
+                    }
+                }
+
+                var fixes = changes.Select(x => ReleaseFixesGroup.Match(x.Message));
+                if (fixes.Any(x => x.Success))
+                {
+                    updateEntity.Fixed.Clear();
+
+                    foreach (Match match in fixes.Where(x => x.Success))
+                    {
+                        updateEntity.Fixed.Add(match.Groups["text"].Value);
+                    }
+                }
+
                 // Process artifacts
                 foreach (var file in files)
                 {
                     // Detect target operating system.
-                    OperatingSystem operatingSystem;
-
-                    if (file.Path.Contains("windows.") && file.Path.ToLower().Contains(".zip"))
-                    {
-                        operatingSystem = OperatingSystem.Windows;
-                    }
-                    else if (file.Path.Contains("linux."))
-                    {
-                        operatingSystem = OperatingSystem.Linux;
-                    }
-                    else if (file.Path.Contains("osx."))
-                    {
-                        operatingSystem = OperatingSystem.Osx;
-                    }
-                    else
+                    var operatingSystem = Parser.ParseOS(file.Path);
+                    if (!operatingSystem.HasValue)
                     {
                         continue;
                     }
+
+                    // Detect runtime / arch
+                    var runtime = Parser.ParseRuntime(file.Path);
+                    var arch = Parser.ParseArchitecture(file.Path);
 
                     // Check if exists in database.
                     var updateFileEntity = _database.UpdateFileEntities
                         .FirstOrDefault(x =>
                             x.UpdateEntityId == updateEntity.UpdateEntityId &&
-                            x.OperatingSystem == operatingSystem);
+                            x.OperatingSystem == operatingSystem.Value &&
+                            x.Runtime == runtime &&
+                            x.Architecture == arch);
 
                     if (updateFileEntity != null) continue;
 
@@ -171,7 +199,9 @@ namespace RadarrAPI.Services.ReleaseCheck.Azure
                     // Add to database.
                     updateEntity.UpdateFiles.Add(new UpdateFileEntity
                     {
-                        OperatingSystem = operatingSystem,
+                        OperatingSystem = operatingSystem.Value,
+                        Architecture = arch,
+                        Runtime = runtime,
                         Filename = releaseFileName,
                         Url = releaseDownloadUrl,
                         Hash = releaseHash

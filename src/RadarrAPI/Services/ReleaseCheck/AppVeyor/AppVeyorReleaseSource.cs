@@ -43,7 +43,7 @@ namespace RadarrAPI.Services.ReleaseCheck.AppVeyor
             }
 
             var hasNewRelease = false;
-            var historyUrl = $"https://ci.appveyor.com/api/projects/{AccountName}/{ProjectSlug}/history?recordsNumber=10&branch=develop";
+            var historyUrl = $"https://ci.appveyor.com/api/projects/{AccountName}/{ProjectSlug}/history?recordsNumber=100&branch=develop";
 
             var historyData = await _httpClient.GetStringAsync(historyUrl);
             var history = JsonConvert.DeserializeObject<AppVeyorProjectHistory>(historyData);
@@ -55,7 +55,7 @@ namespace RadarrAPI.Services.ReleaseCheck.AppVeyor
             // - pull requests,
             // - unsuccesful builds,
             // - tagged builds (duplicate).
-            foreach (var build in history.Builds.Where(x => !x.PullRequestId.HasValue && !x.IsTag).ToList())
+            foreach (var build in history.Builds.Where(x => !x.PullRequestId.HasValue && !x.IsTag).Take(10).ToList())
             {
                 if (lastBuild.HasValue &&
                     lastBuild.Value >= build.BuildId) break;

@@ -26,5 +26,6 @@ namespace RadarrAPI.Update.Data
 
         public string Branch { get; set; }
 
+        public string Runtime { get; set; }
     }
 }

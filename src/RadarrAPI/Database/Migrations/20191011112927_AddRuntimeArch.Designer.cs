@@ -2,15 +2,17 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using RadarrAPI.Database;
 
 namespace RadarrAPI.Database.Migrations
 {
     [DbContext(typeof(DatabaseContext))]
-    partial class DatabaseContextModelSnapshot : ModelSnapshot
+    [Migration("20191011112927_AddRuntimeArch")]
+    partial class AddRuntimeArch
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -76,9 +78,11 @@ namespace RadarrAPI.Database.Migrations
                     b.Property<sbyte>("OperatingSystem")
                         .HasColumnType("tinyint");
 
-                    b.Property<sbyte>("Architecture");
+                    b.Property<sbyte>("Architecture")
+                        .HasColumnType("tinyint");
 
-                    b.Property<sbyte>("Runtime");
+                    b.Property<sbyte>("Runtime")
+                        .HasColumnType("tinyint");
 
                     b.Property<string>("Filename")
                         .IsRequired()

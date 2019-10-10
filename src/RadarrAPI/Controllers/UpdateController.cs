@@ -7,6 +7,10 @@ using RadarrAPI.Database;
 using RadarrAPI.Update.Data;
 using Branch = RadarrAPI.Update.Branch;
 using OperatingSystem = RadarrAPI.Update.OperatingSystem;
+using Runtime = RadarrAPI.Update.Runtime;
+using Architecture = System.Runtime.InteropServices.Architecture;
+using System.Linq.Expressions;
+using RadarrAPI.Database.Models;
 
 namespace RadarrAPI.Controllers
 {
@@ -20,28 +24,59 @@ namespace RadarrAPI.Controllers
             _database = database;
         }
 
+        private IQueryable<UpdateFileEntity> GetUpdateFiles(Branch branch, OperatingSystem os, Runtime runtime, Architecture arch)
+        {
+            // Mono and Dotnet are equivalent for our purposes
+            if (runtime == Runtime.Mono)
+            {
+                runtime = Runtime.DotNet;
+            }
+
+            // If runtime is DotNet then default arch to x64
+            if (runtime == Runtime.DotNet)
+            {
+                arch = Architecture.X64;
+            }
+
+            Expression<Func<UpdateFileEntity, bool>> predicate;
+
+            // Return whatever runtime/arch for macos and windows
+            // Choose correct runtime/arch for linux
+            if (os == OperatingSystem.Linux)
+            {
+                predicate = (x) => x.Update.Branch == branch &&
+                    x.OperatingSystem == os &&
+                    x.Architecture == arch &&
+                    x.Runtime == runtime;
+            }
+            else
+            {
+                predicate = (x) => x.Update.Branch == branch &&
+                    x.OperatingSystem == os;
+            }
+
+            return _database.UpdateFileEntities
+                .Include(x => x.Update)
+                .Where(predicate)
+                .OrderByDescending(x => x.Update.ReleaseDate);
+        }
+
         [Route("{branch}/changes")]
         [HttpGet]
         public ActionResult GetChanges(
             [FromRoute(Name = "branch")] Branch updateBranch,
-            [FromQuery(Name = "os")] OperatingSystem operatingSystem)
+            [FromQuery(Name = "os")] OperatingSystem operatingSystem,
+            [FromQuery(Name = "runtime")] Runtime runtime = Runtime.DotNet,
+            [FromQuery(Name = "arch")] Architecture arch = Architecture.X64
+            )
         {
-            var updates = _database.UpdateEntities
-                .Include(x => x.UpdateFiles)
-                .Where(x => x.Branch == updateBranch && x.UpdateFiles.Any(u => u.OperatingSystem == operatingSystem))
-                .OrderByDescending(x => x.ReleaseDate)
-                .Take(5);
+            var updateFiles = GetUpdateFiles(updateBranch, operatingSystem, runtime, arch).Take(5);
 
             var response = new List<UpdatePackage>();
 
-            foreach (var update in updates)
+            foreach (var updateFile in updateFiles)
             {
-                var updateFile = update.UpdateFiles.FirstOrDefault(u => u.OperatingSystem == operatingSystem);
-                if (updateFile == null)
-                {
-                    continue;
-                }
-
+                var update = updateFile.Update;
                 UpdateChanges updateChanges = null;
 
                 if (update.New.Count != 0 || update.Fixed.Count != 0)
@@ -70,10 +105,11 @@ namespace RadarrAPI.Controllers
 
         [Route("{branch}")]
         [HttpGet]
-        public ActionResult GetUpdates(
-            [FromRoute(Name = "branch")]Branch updateBranch, 
-            [FromQuery(Name = "os")]OperatingSystem operatingSystem,
-            [FromQuery(Name = "version")]string urlVersion)
+        public ActionResult GetUpdates([FromRoute(Name = "branch")] Branch updateBranch,
+                                 [FromQuery(Name = "version")] string urlVersion,
+                                 [FromQuery(Name = "os")] OperatingSystem operatingSystem,
+                                 [FromQuery(Name = "runtime")] Runtime runtime,
+                                 [FromQuery(Name = "arch")] Architecture arch)
         {
             // Check given version
             if (!Version.TryParse(urlVersion, out var version))
@@ -84,14 +120,9 @@ namespace RadarrAPI.Controllers
                 });
             }
 
-            // Grab latest update based on branch and operatingsystem
-            var update = _database.UpdateEntities
-                .Include(x => x.UpdateFiles)
-                .Where(x => x.Branch == updateBranch && x.UpdateFiles.Any(u => u.OperatingSystem == operatingSystem))
-                .OrderByDescending(x => x.ReleaseDate)
-                .FirstOrDefault();
+            var updateFile = GetUpdateFiles(updateBranch, operatingSystem, runtime, arch).FirstOrDefault();
 
-            if (update == null)
+            if (updateFile == null)
             {
                 return NotFound(new
                 {
@@ -99,15 +130,7 @@ namespace RadarrAPI.Controllers
                 });
             }
 
-            // Check if update file is present
-            var updateFile = update.UpdateFiles.FirstOrDefault(u => u.OperatingSystem == operatingSystem);
-            if (updateFile == null)
-            {
-                return NotFound(new
-                {
-                    ErrorMessage = "Latest update file not found."
-                });
-            }
+            var update = updateFile.Update;
 
             // Compare given version and update version
             var updateVersion = new Version(update.Version);
@@ -142,9 +165,40 @@ namespace RadarrAPI.Controllers
                     Url = updateFile.Url,
                     Changes = updateChanges,
                     Hash = updateFile.Hash,
-                    Branch = update.Branch.ToString().ToLower()
+                    Branch = update.Branch.ToString().ToLower(),
+                    Runtime = updateFile.Runtime.ToString().ToLower()
                 }
             });
+        }
+
+        [Route("{branch}/updatefile")]
+        [HttpGet]
+        public object GetUpdateFile([FromRoute(Name = "branch")] Branch updateBranch,
+                                    [FromQuery(Name = "version")] string urlVersion,
+                                    [FromQuery(Name = "os")] OperatingSystem operatingSystem,
+                                    [FromQuery(Name = "runtime")] Runtime runtime,
+                                    [FromQuery(Name = "arch")] Architecture arch)
+        {
+            // Check given version
+            if (!Version.TryParse(urlVersion, out Version version))
+            {
+                return new
+                {
+                    ErrorMessage = "Invalid version number specified."
+                };
+            }
+
+            var updateFile = GetUpdateFiles(updateBranch, operatingSystem, runtime, arch).FirstOrDefault();
+
+            if (updateFile == null)
+            {
+                return new
+                    {
+                        ErrorMessage = $"Version {version} not found."
+                    };
+            }
+
+            return RedirectPermanent(updateFile.Url);
         }
     }
 }

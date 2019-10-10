@@ -38,7 +38,7 @@ namespace RadarrAPI.Database
             
             modelBuilder.Entity<UpdateFileEntity>(builder =>
             {
-                builder.HasKey(k => new {k.UpdateEntityId, k.OperatingSystem});
+                builder.HasKey(k => new {k.UpdateEntityId, k.OperatingSystem, k.Architecture, k.Runtime});
 
                 builder.Property(x => x.OperatingSystem).IsRequired().HasColumnType("tinyint");
                 builder.Property(x => x.Filename).IsRequired().HasMaxLength(128);
