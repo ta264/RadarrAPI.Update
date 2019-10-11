@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
@@ -173,6 +174,8 @@ namespace RadarrAPI.Services.ReleaseCheck.AppVeyor
                     updateEntity.UpdateFiles.Add(new UpdateFileEntity
                     {
                         OperatingSystem = operatingSystem,
+                        Architecture = Architecture.X64,
+                        Runtime = Runtime.DotNet,
                         Filename = releaseFileName,
                         Url = releaseDownloadUrl,
                         Hash = releaseHash
