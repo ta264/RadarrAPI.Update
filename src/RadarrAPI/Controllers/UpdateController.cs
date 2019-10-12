@@ -124,9 +124,9 @@ namespace RadarrAPI.Controllers
 
             if (updateFile == null)
             {
-                return NotFound(new
+                return Ok(new UpdatePackageContainer
                 {
-                    ErrorMessage = "Latest update not found."
+                    Available = false
                 });
             }
 
