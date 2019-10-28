@@ -19,6 +19,7 @@
     <!-- These are necessary for deployment on linux. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore" Version="2.2.6" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="2.2.6" />
+    <PackageReference Include="Microsoft.TeamFoundationServer.Client" Version="16.153.0" />
   </ItemGroup>
   
 </Project>

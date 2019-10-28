@@ -9,7 +9,7 @@ RUN dotnet publish -c $config -o ../out
 
 FROM mcr.microsoft.com/dotnet/core/aspnet:2.2-alpine
 WORKDIR /app
-COPY --from=sdk /app/out/* ./
+COPY --from=sdk /app/out/. ./
 
 # Docker Entry
 ENTRYPOINT ["dotnet", "RadarrAPI.dll"]
