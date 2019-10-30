@@ -188,7 +188,7 @@ namespace RadarrAPI.Controllers
                 };
             }
 
-            var updateFile = GetUpdateFiles(updateBranch, operatingSystem, runtime, arch).FirstOrDefault();
+            var updateFile = GetUpdateFiles(updateBranch, operatingSystem, runtime, arch).FirstOrDefault(x => x.Update.Version == version.ToString());
 
             if (updateFile == null)
             {
