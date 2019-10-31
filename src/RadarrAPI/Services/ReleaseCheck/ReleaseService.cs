@@ -17,23 +17,21 @@ namespace RadarrAPI.Services.ReleaseCheck
 {
     public class ReleaseService
     {
-        private static readonly ConcurrentDictionary<Branch, SemaphoreSlim> ReleaseLocks;
+        private static readonly ConcurrentDictionary<Type, SemaphoreSlim> ReleaseLocks;
 
         private readonly IServiceScopeFactory _serviceScopeFactory;
 
         private readonly IHub _sentry;
         private readonly ILogger<ReleaseService> _logger;
 
-        private readonly ConcurrentDictionary<Branch, Type> _releaseBranches;
-
         private readonly RadarrOptions _config;
 
         static ReleaseService()
         {
-            ReleaseLocks = new ConcurrentDictionary<Branch, SemaphoreSlim>();
-            ReleaseLocks.TryAdd(Branch.Develop, new SemaphoreSlim(1, 1));
-            ReleaseLocks.TryAdd(Branch.Nightly, new SemaphoreSlim(1, 1));
-            ReleaseLocks.TryAdd(Branch.Aphrodite, new SemaphoreSlim(1, 1));
+            ReleaseLocks = new ConcurrentDictionary<Type, SemaphoreSlim>();
+            ReleaseLocks.TryAdd(typeof(GithubReleaseSource), new SemaphoreSlim(1, 1));
+            ReleaseLocks.TryAdd(typeof(AzureReleaseSource), new SemaphoreSlim(1, 1));
+            ReleaseLocks.TryAdd(typeof(AppVeyorReleaseSource), new SemaphoreSlim(1, 1));
         }
 
         public ReleaseService(
@@ -46,24 +44,14 @@ namespace RadarrAPI.Services.ReleaseCheck
             _sentry = sentry;
             _logger = logger;
 
-            _releaseBranches = new ConcurrentDictionary<Branch, Type>();
-            _releaseBranches.TryAdd(Branch.Develop, typeof(GithubReleaseSource));
-            _releaseBranches.TryAdd(Branch.Nightly, typeof(AppVeyorReleaseSource));
-            _releaseBranches.TryAdd(Branch.Aphrodite, typeof(AzureReleaseSource));
-
             _config = configOptions.Value;
         }
 
-        public async Task UpdateReleasesAsync(Branch branch)
+        public async Task UpdateReleasesAsync(Type releaseSource)
         {
-            if (!_releaseBranches.TryGetValue(branch, out var releaseSourceBaseType))
+            if (!ReleaseLocks.TryGetValue(releaseSource, out var releaseLock))
             {
-                throw new NotImplementedException($"{branch} does not have a release source.");
-            }
-
-            if (!ReleaseLocks.TryGetValue(branch, out var releaseLock))
-            {
-                throw new NotImplementedException($"{branch} does not have a release lock.");
+                throw new NotImplementedException($"{releaseSource} does not have a release lock.");
             }
 
             var obtainedLock = false;
@@ -76,15 +64,9 @@ namespace RadarrAPI.Services.ReleaseCheck
                 {
                     using (var scope = _serviceScopeFactory.CreateScope())
                     {
-                        var releaseSourceInstance = (ReleaseSourceBase) scope.ServiceProvider.GetRequiredService(releaseSourceBaseType);
+                        var releaseSourceInstance = (ReleaseSourceBase) scope.ServiceProvider.GetRequiredService(releaseSource);
 
-                        releaseSourceInstance.ReleaseBranch = branch;
-
-                        var hasNewRelease = await releaseSourceInstance.StartFetchReleasesAsync();
-                        if (hasNewRelease)
-                        {
-                            await CallTriggers(branch);
-                        }
+                        await releaseSourceInstance.StartFetchReleasesAsync();
                     }
                 }
             }
@@ -98,37 +80,6 @@ namespace RadarrAPI.Services.ReleaseCheck
                 if (obtainedLock)
                 {
                     releaseLock.Release();
-                }
-            }
-        }
-
-        private async Task CallTriggers(Branch branch)
-        {
-            _logger.LogDebug("Calling triggers for branch {0}.", branch);
-
-            if (_config.Triggers == null || !_config.Triggers.TryGetValue(branch, out var triggers) || triggers.Count == 0)
-            {
-                return;
-            }
-
-            foreach (var trigger in triggers)
-            {
-                try
-                {
-                    var request = WebRequest.CreateHttp(trigger);
-                    request.Method = "GET";
-                    request.UserAgent = "RadarrAPI.Update/Trigger";
-                    request.KeepAlive = false;
-                    request.Timeout = 2500;
-                    request.ReadWriteTimeout = 2500;
-                    request.ContinueTimeout = 2500;
-
-                    var response = await request.GetResponseAsync();
-                    response.Dispose();
-                }
-                catch (Exception)
-                {
-                    // don't care.
                 }
             }
         }

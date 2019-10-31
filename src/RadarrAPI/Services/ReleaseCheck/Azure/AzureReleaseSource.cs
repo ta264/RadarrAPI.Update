@@ -5,15 +5,17 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using LidarrAPI.Extensions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.TeamFoundation.Build.WebApi;
 using Microsoft.VisualStudio.Services.Common;
 using Microsoft.VisualStudio.Services.WebApi;
+using Octokit;
 using RadarrAPI.Database;
 using RadarrAPI.Database.Models;
 using RadarrAPI.Options;
-using RadarrAPI.Update;
 using RadarrAPI.Util;
 
 namespace RadarrAPI.Services.ReleaseCheck.Azure
@@ -29,48 +31,51 @@ namespace RadarrAPI.Services.ReleaseCheck.Azure
 
         private readonly DatabaseContext _database;
         private readonly RadarrOptions _config;
+        private readonly GitHubClient _githubClient;
         private readonly HttpClient _httpClient;
         private readonly VssConnection _connection;
+        private readonly ILogger<AzureReleaseSource> _logger;
 
         private static readonly Regex ReleaseFeaturesGroup = new Regex(@"^New:\s*(?<text>.*?)\r*$", RegexOptions.Compiled);
         private static readonly Regex ReleaseFixesGroup = new Regex(@"^Fixed:\s*(?<text>.*?)\r*$", RegexOptions.Compiled);
 
-        public AzureReleaseSource(DatabaseContext database, IHttpClientFactory httpClientFactory, IOptions<RadarrOptions> config)
+        public AzureReleaseSource(DatabaseContext database,
+                                  IHttpClientFactory httpClientFactory,
+                                  IOptions<RadarrOptions> config,
+                                  ILogger<AzureReleaseSource> logger)
         {
             _database = database;
             _config = config.Value;
             _httpClient = httpClientFactory.CreateClient();
             _connection = new VssConnection(new Uri($"https://dev.azure.com/{AccountName}"), new VssBasicCredential());
+            _githubClient = new GitHubClient(new ProductHeaderValue("RadarrAPI"));
+            _httpClient = new HttpClient();
+            _logger = logger;
         }
 
         protected override async Task<bool> DoFetchReleasesAsync()
         {
-            if (ReleaseBranch == Branch.Unknown)
-            {
-                throw new ArgumentException("ReleaseBranch must not be unknown when fetching releases.");
-            }
-
-            string branchName;
-            if (ReleaseBranch == Branch.Aphrodite)
-            {
-                branchName = "aphrodite";
-            }
-            else
-            {
-                throw new ArgumentException($"ReleaseBranch {ReleaseBranch} not supported for Azure");
-            }
-
             var hasNewRelease = false;
 
             var buildClient = _connection.GetClient<BuildHttpClient>();
-            var history = await buildClient.GetBuildsAsync(project: ProjectSlug,
-                                                           definitions: BuildPipelines,
-                                                           branchName: $"refs/heads/{branchName}",
-                                                           reasonFilter: BuildReason.IndividualCI | BuildReason.Manual,
-                                                           statusFilter: BuildStatus.Completed,
-                                                           resultFilter: BuildResult.Succeeded,
-                                                           queryOrder: BuildQueryOrder.StartTimeDescending,
-                                                           top: 5);
+            var nightlyHistory = await buildClient.GetBuildsAsync(project: ProjectSlug,
+                                                                  definitions: BuildPipelines,
+                                                                  branchName: "refs/heads/aphrodite",
+                                                                  reasonFilter: BuildReason.IndividualCI | BuildReason.Manual,
+                                                                  statusFilter: BuildStatus.Completed,
+                                                                  resultFilter: BuildResult.Succeeded,
+                                                                  queryOrder: BuildQueryOrder.StartTimeDescending,
+                                                                  top: 5);
+
+            var prHistory = await buildClient.GetBuildsAsync(project: ProjectSlug,
+                                                             definitions: BuildPipelines,
+                                                             reasonFilter: BuildReason.PullRequest | BuildReason.Manual,
+                                                             statusFilter: BuildStatus.Completed,
+                                                             resultFilter: BuildResult.Succeeded,
+                                                             queryOrder: BuildQueryOrder.StartTimeDescending,
+                                                             top: 5);
+
+            var history = nightlyHistory.Concat(prHistory).DistinctBy(x => x.Id).OrderByDescending(x => x.Id);
 
             // Store here temporarily so we don't break on not processed builds.
             var lastBuild = _lastBuildId;
@@ -82,6 +87,54 @@ namespace RadarrAPI.Services.ReleaseCheck.Azure
                 {
                     break;
                 }
+
+                // Extract the build version
+                _logger.LogInformation($"Found version: {build.BuildNumber}");
+
+                // Get the branch - either PR source branch or the actual brach
+                string branch = null;
+                if (build.SourceBranch.StartsWith("refs/heads/"))
+                {
+                    branch = build.SourceBranch.Replace("refs/heads/", string.Empty);
+                }
+                else if (build.SourceBranch.StartsWith("refs/pull/"))
+                {
+                    var success = int.TryParse(build.SourceBranch.Split("/")[2], out var prNum);
+                    if (!success)
+                    {
+                        continue;
+                    }
+
+                    var pr = await _githubClient.PullRequest.Get(AccountName, ProjectSlug, prNum);
+
+                    if (pr.Head.Repository.Fork)
+                    {
+                        continue;
+                    }
+
+                    branch = pr.Head.Ref;
+                }
+                else
+                {
+                    continue;
+                }
+
+                // If the branch is call nightly (conflicts with daily develop builds)
+                // or branch is called master (will get picked up when the github release goes up)
+                // then skip
+                if (branch == "nightly" || branch == "master")
+                {
+                    _logger.LogInformation($"Skipping azure build with branch {branch}");
+                    continue;
+                }
+
+                // On azure, develop -> nightly
+                if (branch == "develop")
+                {
+                    branch = "nightly";
+                }
+
+                _logger.LogInformation($"Found branch for version {build.BuildNumber}: {branch}");
 
                 // Get build changes
                 var changesTask = buildClient.GetBuildChangesAsync(ProjectSlug, build.Id);
@@ -102,7 +155,7 @@ namespace RadarrAPI.Services.ReleaseCheck.Azure
                 // Get an updateEntity
                 var updateEntity = _database.UpdateEntities
                     .Include(x => x.UpdateFiles)
-                    .FirstOrDefault(x => x.Version.Equals(build.BuildNumber) && x.Branch.Equals(ReleaseBranch));
+                    .FirstOrDefault(x => x.Version.Equals(build.BuildNumber) && x.Branch.Equals(branch));
 
                 if (updateEntity == null)
                 {
@@ -111,7 +164,7 @@ namespace RadarrAPI.Services.ReleaseCheck.Azure
                     {
                         Version = build.BuildNumber,
                         ReleaseDate = build.StartTime.Value,
-                        Branch = ReleaseBranch
+                        Branch = branch
                     };
 
                     // Start tracking this object
@@ -171,7 +224,7 @@ namespace RadarrAPI.Services.ReleaseCheck.Azure
 
                     // Calculate the hash of the zip file.
                     var releaseFileName = Path.GetFileName(file.Path);
-                    var releaseZip = Path.Combine(_config.DataDirectory, ReleaseBranch.ToString(), releaseFileName);
+                    var releaseZip = Path.Combine(_config.DataDirectory, branch, releaseFileName);
                     string releaseHash;
 
                     if (!File.Exists(releaseZip))

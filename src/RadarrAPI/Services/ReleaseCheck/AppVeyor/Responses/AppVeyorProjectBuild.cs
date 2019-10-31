@@ -5,6 +5,8 @@ namespace RadarrAPI.Services.ReleaseCheck.AppVeyor.Responses
 {
     public class AppVeyorProjectBuild
     {
+        [JsonProperty("branch")]
+        public string Branch { get; set; }
 
         [JsonProperty("buildId")]
         public int BuildId { get; set; }

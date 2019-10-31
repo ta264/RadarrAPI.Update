@@ -4,7 +4,9 @@ using Microsoft.Extensions.Options;
 using RadarrAPI.Options;
 using RadarrAPI.Services.BackgroundTasks;
 using RadarrAPI.Services.ReleaseCheck;
-using RadarrAPI.Update;
+using RadarrAPI.Services.ReleaseCheck.AppVeyor;
+using RadarrAPI.Services.ReleaseCheck.Azure;
+using RadarrAPI.Services.ReleaseCheck.Github;
 
 namespace RadarrAPI.Controllers
 {
@@ -23,17 +25,25 @@ namespace RadarrAPI.Controllers
 
         [Route("refresh")]
         [HttpGet, HttpPost]
-        public string Refresh([FromQuery] Branch branch, [FromQuery(Name = "api_key")] string apiKey)
+        public string Refresh([FromQuery] string source, [FromQuery(Name = "api_key")] string apiKey)
         {
             if (!_config.ApiKey.Equals(apiKey))
             {
                 return "No, thank you.";
             }
 
+            var type = source.ToLower() switch
+            {
+                "appveyor" => typeof(AppVeyorReleaseSource),
+                "azure" => typeof(AzureReleaseSource),
+                "github" => typeof(GithubReleaseSource),
+                _ => null
+            };
+
             _queue.QueueBackgroundWorkItem(async (serviceProvider, token) =>
             {
                 var releaseService = serviceProvider.GetRequiredService<ReleaseService>();
-                await releaseService.UpdateReleasesAsync(branch);
+                await releaseService.UpdateReleasesAsync(type);
             });
 
             return "Thank you.";

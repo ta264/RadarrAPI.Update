@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations.Schema;
 using Newtonsoft.Json;
-using RadarrAPI.Update;
 
 namespace RadarrAPI.Database.Models
 {
@@ -40,7 +39,7 @@ namespace RadarrAPI.Database.Models
         /// <summary>
         ///     The update branch.
         /// </summary>
-        public Branch Branch { get; set; }
+        public string Branch { get; set; }
 
         /// <summary>
         ///     The files that belong to this update.

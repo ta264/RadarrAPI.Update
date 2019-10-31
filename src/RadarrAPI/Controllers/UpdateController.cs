@@ -5,7 +5,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using RadarrAPI.Database;
 using RadarrAPI.Update.Data;
-using Branch = RadarrAPI.Update.Branch;
 using OperatingSystem = RadarrAPI.Update.OperatingSystem;
 using Runtime = RadarrAPI.Update.Runtime;
 using Architecture = System.Runtime.InteropServices.Architecture;
@@ -24,7 +23,7 @@ namespace RadarrAPI.Controllers
             _database = database;
         }
 
-        private IQueryable<UpdateFileEntity> GetUpdateFiles(Branch branch, OperatingSystem os, Runtime runtime, Architecture arch)
+        private IQueryable<UpdateFileEntity> GetUpdateFiles(string branch, OperatingSystem os, Runtime runtime, Architecture arch)
         {
             // Mono and Dotnet are equivalent for our purposes
             if (runtime == Runtime.Mono)
@@ -64,7 +63,7 @@ namespace RadarrAPI.Controllers
         [Route("{branch}/changes")]
         [HttpGet]
         public ActionResult GetChanges(
-            [FromRoute(Name = "branch")] Branch updateBranch,
+            [FromRoute(Name = "branch")] string updateBranch,
             [FromQuery(Name = "os")] OperatingSystem operatingSystem,
             [FromQuery(Name = "runtime")] Runtime runtime = Runtime.DotNet,
             [FromQuery(Name = "arch")] Architecture arch = Architecture.X64
@@ -105,7 +104,7 @@ namespace RadarrAPI.Controllers
 
         [Route("{branch}")]
         [HttpGet]
-        public ActionResult GetUpdates([FromRoute(Name = "branch")] Branch updateBranch,
+        public ActionResult GetUpdates([FromRoute(Name = "branch")] string updateBranch,
                                  [FromQuery(Name = "version")] string urlVersion,
                                  [FromQuery(Name = "os")] OperatingSystem operatingSystem,
                                  [FromQuery(Name = "runtime")] Runtime runtime,
@@ -173,28 +172,36 @@ namespace RadarrAPI.Controllers
 
         [Route("{branch}/updatefile")]
         [HttpGet]
-        public object GetUpdateFile([FromRoute(Name = "branch")] Branch updateBranch,
+        public object GetUpdateFile([FromRoute(Name = "branch")] string updateBranch,
                                     [FromQuery(Name = "version")] string urlVersion,
                                     [FromQuery(Name = "os")] OperatingSystem operatingSystem,
                                     [FromQuery(Name = "runtime")] Runtime runtime,
                                     [FromQuery(Name = "arch")] Architecture arch)
         {
-            // Check given version
-            if (!Version.TryParse(urlVersion, out Version version))
-            {
-                return new
-                {
-                    ErrorMessage = "Invalid version number specified."
-                };
-            }
+            UpdateFileEntity updateFile;
 
-            var updateFile = GetUpdateFiles(updateBranch, operatingSystem, runtime, arch).FirstOrDefault(x => x.Update.Version == version.ToString());
+            if (urlVersion != null)
+            {
+                if (!Version.TryParse(urlVersion, out Version version))
+                {
+                    return new
+                        {
+                            ErrorMessage = "Invalid version number specified."
+                        };
+                }
+
+                updateFile = GetUpdateFiles(updateBranch, operatingSystem, runtime, arch).FirstOrDefault(x => x.Update.Version == version.ToString());
+            }
+            else
+            {
+                updateFile = GetUpdateFiles(updateBranch, operatingSystem, runtime, arch).FirstOrDefault();
+            }
 
             if (updateFile == null)
             {
                 return new
                     {
-                        ErrorMessage = $"Version {version} not found."
+                        ErrorMessage = $"Update file for {updateBranch}-{urlVersion} not found."
                     };
             }
 

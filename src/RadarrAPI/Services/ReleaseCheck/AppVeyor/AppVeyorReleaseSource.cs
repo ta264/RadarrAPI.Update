@@ -38,13 +38,8 @@ namespace RadarrAPI.Services.ReleaseCheck.AppVeyor
 
         protected override async Task<bool> DoFetchReleasesAsync()
         {
-            if (ReleaseBranch == Branch.Unknown)
-            {
-                throw new ArgumentException("ReleaseBranch must not be unknown when fetching releases.");
-            }
-
             var hasNewRelease = false;
-            var historyUrl = $"https://ci.appveyor.com/api/projects/{AccountName}/{ProjectSlug}/history?recordsNumber=100&branch=develop";
+            var historyUrl = $"https://ci.appveyor.com/api/projects/{AccountName}/{ProjectSlug}/history?recordsNumber=100";
 
             var historyData = await _httpClient.GetStringAsync(historyUrl);
             var history = JsonConvert.DeserializeObject<AppVeyorProjectHistory>(historyData);
@@ -63,6 +58,14 @@ namespace RadarrAPI.Services.ReleaseCheck.AppVeyor
 
                 if (build.PullRequestId.HasValue ||
                     build.IsTag) continue;
+
+                var branch = build.Branch;
+
+                // On appveyor, develop -> nightly
+                if (branch == "develop")
+                {
+                    branch = "nightly";
+                }
 
                 var buildExtendedData = await _httpClient.GetStringAsync($"https://ci.appveyor.com/api/projects/{AccountName}/{ProjectSlug}/build/{build.Version}");
                 var buildExtended = JsonConvert.DeserializeObject<AppVeyorProjectLastBuild>(buildExtendedData).Build;
@@ -83,7 +86,7 @@ namespace RadarrAPI.Services.ReleaseCheck.AppVeyor
                     .Include(x => x.UpdateFiles)
                     .FirstOrDefaultAsync(x => 
                         x.Version.Equals(buildExtended.Version) && 
-                        x.Branch.Equals(ReleaseBranch));
+                                         x.Branch.Equals(branch.ToLower()));
 
                 if (updateEntity == null)
                 {
@@ -92,7 +95,7 @@ namespace RadarrAPI.Services.ReleaseCheck.AppVeyor
                     {
                         Version = buildExtended.Version,
                         ReleaseDate = buildExtended.Started.Value.UtcDateTime,
-                        Branch = ReleaseBranch,
+                        Branch = branch.ToLower(),
                         New = new List<string>
                             {
                                 build.Message
@@ -146,7 +149,7 @@ namespace RadarrAPI.Services.ReleaseCheck.AppVeyor
                     // Calculate the hash of the zip file.
                     var releaseDownloadUrl = $"{artifactsPath}/{artifact.FileName}";
                     var releaseFileName = artifact.FileName.Split('/').Last();
-                    var releaseZip = Path.Combine(_config.DataDirectory, ReleaseBranch.ToString(), releaseFileName);
+                    var releaseZip = Path.Combine(_config.DataDirectory, branch.ToLower(), releaseFileName);
                     string releaseHash;
 
                     if (!File.Exists(releaseZip))

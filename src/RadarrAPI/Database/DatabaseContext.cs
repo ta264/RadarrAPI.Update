@@ -25,7 +25,6 @@ namespace RadarrAPI.Database
 
                 builder.Property(x => x.Version).IsRequired().HasMaxLength(32);
                 builder.Property(x => x.ReleaseDate).IsRequired();
-                builder.Property(x => x.Branch).IsRequired().HasColumnType("tinyint");
                 builder.Property(x => x.NewStr).IsRequired().HasMaxLength(8192);
                 builder.Property(x => x.FixedStr).IsRequired().HasMaxLength(8192);
 
@@ -41,6 +40,8 @@ namespace RadarrAPI.Database
                 builder.HasKey(k => new {k.UpdateEntityId, k.OperatingSystem, k.Architecture, k.Runtime});
 
                 builder.Property(x => x.OperatingSystem).IsRequired().HasColumnType("tinyint");
+                builder.Property(x => x.Runtime).IsRequired().HasColumnType("tinyint");
+                builder.Property(x => x.Architecture).IsRequired().HasColumnType("tinyint");
                 builder.Property(x => x.Filename).IsRequired().HasMaxLength(128);
                 builder.Property(x => x.Url).IsRequired().HasMaxLength(255);
                 builder.Property(x => x.Hash).IsRequired().HasMaxLength(64);
